@@ -24,6 +24,7 @@ import pennylane as qml
 from pennylane.templates.decorator import template
 from pennylane.templates.utils import get_shape
 from pennylane.wires import Wires
+import tensorflow as tf
 
 OPTIONS = {"single", "double", "double_odd", "chain", "ring", "pyramid", "all_to_all", "custom"}
 
@@ -584,5 +585,10 @@ def broadcast(unitary, wires, pattern, parameters=None, kwargs=None):
         for i in range(len(wire_sequence)):
             unitary(wires=wire_sequence[i], **kwargs)
     else:
-        for i in range(len(wire_sequence)):
-            unitary(*parameters[i], wires=wire_sequence[i], **kwargs)
+        parameters_rows = tf.expand_dims(tf.range(tf.shape(parameters)[0], dtype=tf.int32), 1)
+        print("params")
+        print(parameters)
+        print(parameters_rows)
+        print(wire_sequence)
+        tf.map_fn(lambda x: unitary(x[0], wires=wire_sequence[x[1].numpy()[0]], **kwargs),  (parameters, parameters_rows))
+

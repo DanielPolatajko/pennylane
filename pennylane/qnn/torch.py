@@ -367,3 +367,79 @@ class TorchLayer(Module):
     def input_arg(self):
         """Name of the argument to be used as the input to the Torch layer. Set to ``"inputs"``."""
         return self._input_arg
+
+import torch
+from torch import nn
+
+
+import pennylane as qml
+from pennylane import numpy as np
+from pennylane.templates import RandomLayers
+
+
+class QonvLayer(nn.Module):
+    def __init__(self, stride=2, device="default.qubit", wires=4, circuit_layers=4, n_rotations=8, out_channels=4,
+                 seed=None):
+        super(QonvLayer, self).__init__()
+
+        # init device
+        self.wires = wires
+        self.dev = qml.device(device, wires=self.wires)
+
+        self.stride = stride
+        self.out_channels = min(out_channels, wires)
+
+        if seed is None:
+            seed = np.random.randint(low=0, high=10e6)
+
+        # random circuits
+        @qml.qnode(device=self.dev)
+        def circuit(inputs, weights):
+            n_inputs = 4
+            # Encoding of 4 classical input values
+            for j in range(n_inputs):
+                qml.RY(inputs[j], wires=j)
+            # Random quantum circuit
+            RandomLayers(weights, wires=list(range(self.wires)), seed=seed)
+
+            # Measurement producing 4 classical output values
+            return [qml.expval(qml.PauliZ(j)) for j in range(self.out_channels)]
+
+        weight_shapes = {"weights": [circuit_layers, n_rotations]}
+        self.circuit = qml.qnn.TorchLayer(circuit, weight_shapes=weight_shapes)
+
+    def draw(self):
+        # build circuit by sending dummy data through it
+        _ = self.circuit(inputs=torch.from_numpy(np.zeros(4)))
+        print(self.circuit.qnode.draw())
+        self.circuit.zero_grad()
+
+    def forward(self, img):
+        bs, h, w, ch = img.size()
+        if ch > 1:
+            img = img.mean(axis=-1).reshape(bs, h, w, 1)
+
+        kernel_size = 2
+        h_out = (h - kernel_size) // self.stride + 1
+        w_out = (w - kernel_size) // self.stride + 1
+
+        out = torch.zeros((bs, h_out, w_out, self.out_channels))
+
+        # Loop over the coordinates of the top-left pixel of 2X2 squares
+        for b in range(bs):
+            for j in range(0, h_out, self.stride):
+                for k in range(0, w_out, self.stride):
+                    # Process a squared 2x2 region of the image with a quantum circuit
+                    q_results = self.circuit(
+                        inputs=torch.Tensor([
+                            img[b, j, k, 0],
+                            img[b, j, k + 1, 0],
+                            img[b, j + 1, k, 0],
+                            img[b, j + 1, k + 1, 0]
+                        ])
+                    )
+                    # Assign expectation values to different channels of the output pixel (j/2, k/2)
+                    for c in range(self.out_channels):
+                        out[b, j // kernel_size, k // kernel_size, c] = q_results[c]
+
+        return out
